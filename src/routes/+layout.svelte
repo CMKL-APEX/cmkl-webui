@@ -116,7 +116,7 @@
 	const DISCONNECT_TOAST_DELAY_MS = 2000;
 
 	const setupSocket = async (enableWebsocket) => {
-		const _socket = io(`${WEBUI_BASE_URL}` || undefined, {
+		const _socket = io(`` || undefined, {
 			reconnection: true,
 			reconnectionDelay: 1000,
 			reconnectionDelayMax: 5000,
@@ -500,7 +500,7 @@
 				if ($settings?.notificationEnabled ?? false) {
 					new Notification(`${data.title} • Open WebUI`, {
 						body: timeStr,
-						icon: `${WEBUI_BASE_URL}/static/favicon.png`
+						icon: `/static/favicon.png`
 					});
 				}
 			}
@@ -631,7 +631,7 @@
 						if ($settings?.notificationEnabled ?? false) {
 							new Notification(`${displayTitle} • Open WebUI`, {
 								body: content,
-								icon: `${WEBUI_BASE_URL}/static/favicon.png`
+								icon: `/static/favicon.png`
 							});
 						}
 					}
@@ -1162,7 +1162,7 @@
 
 <svelte:head>
 	<title>{$WEBUI_NAME}</title>
-	<link crossorigin="anonymous" rel="icon" href="{WEBUI_BASE_URL}/static/favicon.png" />
+	<link crossorigin="anonymous" rel="icon" href="/static/favicon.png" />
 
 	<meta name="apple-mobile-web-app-title" content={$WEBUI_NAME} />
 	<meta name="description" content={$WEBUI_NAME} />
