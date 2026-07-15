@@ -139,6 +139,19 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
 
     existing_ids = {m['id'] for m in models}
 
+    def merge_base_capabilities(info: dict | None, base_model: dict | None) -> dict:
+        if info is None:
+            info = {}
+
+        base_capabilities = (((base_model or {}).get('info') or {}).get('meta') or {}).get('capabilities') or {}
+        if not base_capabilities:
+            return info
+
+        meta = info.setdefault('meta', {})
+        existing_capabilities = meta.get('capabilities') or {}
+        meta['capabilities'] = {**base_capabilities, **existing_capabilities}
+        return info
+
     for custom_model in custom_models:
         if custom_model.base_model_id is None:
             # Override applied directly to a base model (shares the same ID)
@@ -148,6 +161,7 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
                 if custom_model.is_active:
                     model['name'] = custom_model.name
                     model['info'] = custom_model.model_dump()
+                    model['info'] = merge_base_capabilities(model['info'], model)
 
                     action_ids = []
                     filter_ids = []
@@ -200,6 +214,7 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
                 # Remove params to avoid exposing sensitive info
                 del info['params']
 
+            info = merge_base_capabilities(info, base_model)
             model['info'] = info
 
             action_ids = []

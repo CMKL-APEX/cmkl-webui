@@ -60,6 +60,43 @@ from sqlalchemy.ext.asyncio import AsyncSession
 log = logging.getLogger(__name__)
 
 
+def _supports_realtime_voice(api_config: dict, model: dict) -> bool:
+    """Return whether a model should expose realtime voice support.
+
+    Upstream OpenAI-compatible /models responses do not advertise websocket
+    realtime audio support, so we derive it from connection config and allow
+    per-model narrowing.
+    """
+
+    if not api_config:
+        return False
+
+    model_id = model.get('id') or model.get('name') or ''
+    allowed_model_ids = api_config.get('realtime_voice_model_ids') or api_config.get('realtime_model_ids') or []
+
+    if allowed_model_ids:
+        return model_id in allowed_model_ids
+
+    return bool(api_config.get('realtime_voice') or api_config.get('realtime'))
+
+
+def _merge_model_capabilities(model: dict, api_config: dict) -> dict:
+    info = model.setdefault('info', {})
+    meta = info.setdefault('meta', {})
+    capabilities = meta.get('capabilities') or {}
+
+    if _supports_realtime_voice(api_config, model):
+        capabilities = {
+            **capabilities,
+            'realtime_voice': True,
+        }
+
+    if capabilities:
+        meta['capabilities'] = capabilities
+
+    return model
+
+
 ##########################################
 #
 # Utility functions
@@ -455,6 +492,8 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
 
                 if provider:
                     model['provider'] = provider
+
+                _merge_model_capabilities(model, api_config)
 
     log.debug(f'get_all_models:responses() {responses}')
     return responses

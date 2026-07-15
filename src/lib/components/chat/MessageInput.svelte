@@ -507,6 +507,14 @@
 		(model) => $models.find((m) => m.id === model)?.info?.meta?.capabilities?.terminal ?? true
 	);
 
+	let realtimeVoiceCapableModels = [];
+	$: realtimeVoiceCapableModels = (
+		atSelectedModel?.id ? [atSelectedModel.id] : selectedModels
+	).filter(
+		(model) =>
+			$models.find((m) => m.id === model)?.info?.meta?.capabilities?.realtime_voice ?? false
+	);
+
 	let toggleFilters = [];
 	$: toggleFilters = (atSelectedModel?.id ? [atSelectedModel.id] : selectedModels)
 		.map((id) => ($models.find((model) => model.id === id) || {})?.filters ?? [])
@@ -517,6 +525,18 @@
 
 	let showSkillsButton = false;
 	$: showSkillsButton = ($skills ?? []).some((skill) => skill.is_active);
+
+	$: voiceModeDisabled =
+		selectedModels.length !== 1 ||
+		realtimeVoiceCapableModels.length !== 1 ||
+		$config.audio.stt.engine === 'web';
+
+	$: voiceModeDisabledReason =
+		selectedModels.length !== 1
+			? $i18n.t('Select only one model to call')
+			: $config.audio.stt.engine === 'web'
+				? $i18n.t('Call feature is not supported when using Web STT engine')
+				: $i18n.t('Selected model does not support real-time voice chat');
 
 	let showWebSearchButton = false;
 	$: showWebSearchButton =
@@ -2044,20 +2064,14 @@
 												<!-- {$i18n.t('Call')} -->
 												<Tooltip content={$i18n.t('Voice mode')}>
 													<button
-														class=" bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full p-1.5 self-center"
+														class="{voiceModeDisabled
+															? 'bg-gray-200 text-gray-400 dark:bg-gray-800 dark:text-gray-600 cursor-not-allowed '
+															: 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100 '}transition rounded-full p-1.5 self-center"
 														type="button"
+														disabled={voiceModeDisabled}
 														on:click={async () => {
-															if (selectedModels.length > 1) {
-																toast.error($i18n.t('Select only one model to call'));
-
-																return;
-															}
-
-															if ($config.audio.stt.engine === 'web') {
-																toast.error(
-																	$i18n.t('Call feature is not supported when using Web STT engine')
-																);
-
+															if (voiceModeDisabled) {
+																toast.error(voiceModeDisabledReason);
 																return;
 															}
 															// check if user has access to getUserMedia
@@ -2096,7 +2110,9 @@
 																);
 															}
 														}}
-														aria-label={$i18n.t('Voice mode')}
+														aria-label={voiceModeDisabled
+															? voiceModeDisabledReason
+															: $i18n.t('Voice mode')}
 													>
 														<Voice className="size-5" strokeWidth="2.5" />
 													</button>

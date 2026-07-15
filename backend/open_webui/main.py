@@ -28,6 +28,7 @@ from fastapi import (
     HTTPException,
     Request,
     UploadFile,
+    WebSocket,
     applications,
     status,
 )
@@ -1476,6 +1477,188 @@ if audit_level != AuditLevel.NONE:
 # Chat Endpoints
 #
 ##################################
+
+
+async def _send_realtime_ws_error(ws: WebSocket, message: str, close_code: int = 1011):
+    try:
+        await ws.send_json({'type': 'error', 'error': {'message': message}})
+    except Exception:
+        pass
+
+    try:
+        await ws.close(code=close_code, reason=message[:120])
+    except Exception:
+        pass
+
+
+async def _authenticate_realtime_ws_user(ws: WebSocket):
+    try:
+        raw = await asyncio.wait_for(ws.receive_text(), timeout=10.0)
+        payload = json.loads(raw)
+        if payload.get('type') != 'auth':
+            await _send_realtime_ws_error(ws, 'Expected auth message', close_code=4001)
+            return None
+
+        token = payload.get('token', '')
+        data = decode_token(token)
+        if data is None or 'id' not in data:
+            await _send_realtime_ws_error(ws, 'Invalid token', close_code=4001)
+            return None
+
+        user = await Users.get_user_by_id(data['id'])
+        if user is None:
+            await _send_realtime_ws_error(ws, 'User not found', close_code=4001)
+            return None
+
+        return user
+    except (asyncio.TimeoutError, json.JSONDecodeError):
+        await _send_realtime_ws_error(ws, 'Auth timeout or invalid payload', close_code=4001)
+        return None
+    except Exception as e:
+        log.exception('Realtime WebSocket auth error: %s', e)
+        await _send_realtime_ws_error(ws, 'Invalid token', close_code=4001)
+        return None
+
+
+async def _resolve_realtime_ws_connection(request: Request | WebSocket, user, requested_model_id: str):
+    if not request.app.state.MODELS:
+        await get_all_models(request, user=user)
+
+    model = request.app.state.MODELS.get(requested_model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail=ERROR_MESSAGES.MODEL_NOT_FOUND())
+
+    if not BYPASS_MODEL_ACCESS_CONTROL and (user.role != 'admin' or not BYPASS_ADMIN_ACCESS_CONTROL):
+        await check_model_access(user, model)
+
+    model_info = await Models.get_model_by_id(requested_model_id)
+    upstream_model_id = model_info.base_model_id if model_info and model_info.base_model_id else requested_model_id
+
+    openai_models = request.app.state.OPENAI_MODELS
+    if not openai_models or upstream_model_id not in openai_models:
+        await openai.get_all_models(request, user=user)
+        openai_models = request.app.state.OPENAI_MODELS
+
+    upstream_model = openai_models.get(upstream_model_id)
+    if upstream_model is None:
+        raise HTTPException(status_code=400, detail='Realtime voice is only available for configured OpenAI-compatible connections.')
+
+    idx = upstream_model['urlIdx']
+    base_url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
+    key = request.app.state.config.OPENAI_API_KEYS[idx]
+    api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
+        str(idx),
+        request.app.state.config.OPENAI_API_CONFIGS.get(base_url, {}),
+    )
+
+    if api_config.get('azure') or api_config.get('provider') == 'azure':
+        raise HTTPException(status_code=400, detail='Realtime voice is not supported for Azure OpenAI connections.')
+
+    realtime_enabled = (
+        api_config.get('realtime_voice')
+        or api_config.get('realtime')
+        or upstream_model.get('info', {}).get('meta', {}).get('capabilities', {}).get('realtime_voice', False)
+    )
+    if not realtime_enabled:
+        raise HTTPException(status_code=400, detail='Selected model does not support real-time voice chat.')
+
+    headers, cookies = await openai.get_headers_and_cookies(request, base_url, key, api_config, user=user)
+    headers.pop('Content-Type', None)
+
+    prefix_id = api_config.get('prefix_id', None)
+    upstream_payload_model = upstream_model_id
+    if prefix_id and upstream_payload_model.startswith(f'{prefix_id}.'):
+        upstream_payload_model = upstream_payload_model.replace(f'{prefix_id}.', '', 1)
+
+    return {
+        'url': f'{base_url.rstrip("/")}/realtime',
+        'headers': headers,
+        'cookies': cookies,
+        'model': upstream_payload_model,
+    }
+
+
+@app.websocket('/api/v1/realtime')
+async def realtime_proxy(ws: WebSocket):
+    await ws.accept()
+
+    user = await _authenticate_realtime_ws_user(ws)
+    if user is None:
+        return
+
+    try:
+        raw = await asyncio.wait_for(ws.receive_text(), timeout=10.0)
+        initial_event = json.loads(raw)
+        if initial_event.get('type') != 'session.update' or not initial_event.get('model'):
+            await _send_realtime_ws_error(ws, 'Expected session.update with a model', close_code=4002)
+            return
+
+        connection = await _resolve_realtime_ws_connection(ws, user, initial_event['model'])
+        initial_event['model'] = connection['model']
+
+        session = aiohttp.ClientSession()
+        try:
+            async with session.ws_connect(
+                connection['url'],
+                headers=connection['headers'],
+                cookies=connection['cookies'],
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
+                max_msg_size=64 * 1024 * 1024,
+            ) as upstream:
+                await upstream.send_str(json.dumps(initial_event))
+
+                async def _client_to_upstream():
+                    while True:
+                        msg = await ws.receive()
+                        if msg['type'] == 'websocket.disconnect':
+                            break
+                        if msg.get('bytes'):
+                            await upstream.send_bytes(msg['bytes'])
+                            continue
+
+                        text = msg.get('text')
+                        if not text:
+                            continue
+
+                        try:
+                            payload = json.loads(text)
+                            if payload.get('type') == 'auth':
+                                continue
+                            if payload.get('type') == 'session.update' and connection.get('model'):
+                                payload['model'] = connection['model']
+                                text = json.dumps(payload)
+                        except json.JSONDecodeError:
+                            pass
+
+                        await upstream.send_str(text)
+
+                async def _upstream_to_client():
+                    async for msg in upstream:
+                        if msg.type == aiohttp.WSMsgType.BINARY:
+                            await ws.send_bytes(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.TEXT:
+                            await ws.send_text(msg.data)
+                        elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            break
+
+                tasks = [
+                    asyncio.create_task(_client_to_upstream()),
+                    asyncio.create_task(_upstream_to_client()),
+                ]
+                _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+        finally:
+            await session.close()
+    except HTTPException as e:
+        await _send_realtime_ws_error(ws, str(e.detail), close_code=4003)
+    except Exception as e:
+        log.exception('Realtime WebSocket proxy error: %s', e)
+        await _send_realtime_ws_error(ws, 'Realtime proxy connection failed.')
 
 
 @app.get('/api/models')

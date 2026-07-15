@@ -327,6 +327,21 @@
 		);
 	};
 
+	const canOpenRealtimeCall = () => {
+		if (selectedModels.length !== 1) {
+			toast.error($i18n.t('Select only one model to call'));
+			return false;
+		}
+
+		const selectedModel = $models.find((m) => m.id === selectedModels[0]);
+		if (!(selectedModel?.info?.meta?.capabilities?.realtime_voice ?? false)) {
+			toast.error($i18n.t('Selected model does not support real-time voice chat'));
+			return false;
+		}
+
+		return true;
+	};
+
 	const setDefaults = async () => {
 		if (!$tools) {
 			tools.set(await getTools(localStorage.token));
@@ -1323,8 +1338,10 @@
 		}
 
 		if ($page.url.searchParams.get('call') === 'true') {
-			showCallOverlay.set(true);
-			showControls.set(true);
+			if (canOpenRealtimeCall()) {
+				showCallOverlay.set(true);
+				showControls.set(true);
+			}
 		}
 
 		// Consume one-shot desktop event (e.g. Spotlight query, call shortcut)
@@ -1337,8 +1354,10 @@
 				// showControlsSubscribe's initial callback (value=false → set(false))
 				// which runs as a pending microtask after this function.
 				setTimeout(() => {
-					showCallOverlay.set(true);
-					showControls.set(true);
+					if (canOpenRealtimeCall()) {
+						showCallOverlay.set(true);
+						showControls.set(true);
+					}
 				}, 0);
 			} else if (event.type === 'query') {
 				const query = event.data?.query;
