@@ -11,6 +11,9 @@
 </script>
 
 <svelte:head>
+	<!-- LICENSE covers this Open WebUI browser-title identifier.
+	Do not alter, remove, obscure, or replace it except as LICENSE permits:
+	https://docs.openwebui.com/license. -->
 	<title>
 		{$i18n.t('Home')} / {$WEBUI_NAME}
 	</title>
@@ -32,6 +35,7 @@
 						<button
 							id="sidebar-toggle-button"
 							class=" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition cursor-"
+							aria-label={$showSidebar ? $i18n.t('Close Sidebar') : $i18n.t('Open Sidebar')}
 							on:click={() => {
 								showSidebar.set(!$showSidebar);
 							}}
