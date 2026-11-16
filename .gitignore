@@ -311,3 +311,13 @@ cypress/videos
 cypress/screenshots
 .vscode/settings.json
 .cptr
+/evals/
+
+# Local temporary fixtures and screenshots
+/tmp/
+
+# Local secret key (never commit)
+.webui_secret_key
+
+# Local secret key (never commit)
+.webui_secret_key
