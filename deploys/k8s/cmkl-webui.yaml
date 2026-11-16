@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cmkl-web-ui-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cmkl-web-ui
+  labels:
+    app: cmkl-web-ui
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: cmkl-web-ui
+  template:
+    metadata:
+      labels:
+        app: cmkl-web-ui
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secrets
+      containers:
+        - name: cmkl-web-ui
+          image: ghcr.io/cmkl-apex/cmkl-web-ui:0.13.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: cmkl-webui-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: cmkl-web-ui-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cmkl-web-ui
+  labels:
+    app: cmkl-web-ui
+spec:
+  type: ClusterIP
+  selector:
+    app: cmkl-web-ui
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cmkl-web-ui
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - chat.cmkl.ac.th
+      secretName: cmkl-webui-tls
+  rules:
+    - host: chat.cmkl.ac.th
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cmkl-web-ui
+                port:
+                  number: 80
